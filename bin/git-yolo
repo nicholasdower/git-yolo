@@ -1,0 +1,176 @@
+#!/usr/bin/env ruby
+
+require 'optparse'
+
+@command_run = false
+
+def fail(message)
+  warn(message)
+  exit 1
+end
+
+def run(command, failure_message)
+  puts if @command_run
+  @command_run = true
+  puts "running: #{command}"
+  unless system(command)
+    fail(failure_message)
+  end
+end
+
+options = {
+  message:       nil,
+  edit:          false,
+  renase_branch: nil,
+  verify:        false,
+  add:           true,
+  fetch:         true,
+  rebase:        true,
+  push:          true,
+  force:         true,
+  open:          true
+}
+
+parser = OptionParser.new do |opts|
+  opts.banner = <<~EOF
+    Commits and pushes changes. What could go wrong?
+
+    By default, this command runs the following git commands and then opens the
+    current branch on github.com:
+
+        git add .
+        git commit --amend --all --no-edit --no-verify
+        git fetch
+        git rebase origin/<default-branch>
+        git push --force --set-upstream origin HEAD
+
+    To install, add this script to your PATH, then run one of the following:
+
+        git config --global alias.yolo '!git-yolo' # All repos
+        git config alias.yolo '!git-yolo'          # Current repo only
+
+    Usage: git yolo [options]
+
+    Options:
+  EOF
+
+  opts.on('-h', "Print this message (Don't use --help).") do
+    puts opts
+    exit
+  end
+  
+  opts.on('-m', '--message MESSAGE', 'Create a new commit rather than ammending.') do |s|
+    options[:message] = s
+  end
+
+  opts.on('-e', '--edit', 'Edit commit message.') do
+    options[:edit] = true
+  end
+
+  opts.on('-v', '--verify', 'Run verifications when committing.') do
+    options[:verify] = true
+  end
+
+  opts.on('-b', '--rebase-branch', "Use this branch when rebasing rather than the repo's default branch.") do |b|
+    options[:rebase_branch] = b
+  end
+
+  opts.on('--no-add', "Don't add.") do
+    options[:add] = false
+  end
+
+  opts.on('--no-fetch', "Don't fetch.") do
+    options[:fetch] = false
+  end
+
+  opts.on('--no-rebase', "Don't rebase.") do
+    options[:rebase] = false
+  end
+
+  opts.on('--no-push', "Don't push.") do
+    options[:push] = false
+  end
+
+  opts.on('--no-force', "Don't force push.") do
+    options[:force] = false
+  end
+
+  opts.on('--no-open', "Don't open on GitHub.") do
+    options[:open] = false
+  end
+end
+
+parser.parse!
+
+if options[:edit] && options[:message]
+  warn('fatal: you may only specify one of --edit and --message')
+  puts
+  puts parser.help
+  exit 1
+end
+
+branch = `git branch --show-current`.strip
+if !$?.success? || branch.empty?
+  fail('fatal: cannot determine current branch')
+end
+
+default_branch = `git symbolic-ref refs/remotes/origin/HEAD`.strip
+unless $?.success? && default_branch.match?(/^refs\/remotes\/origin\/[^\/]+$/)
+  fail('fatal: cannot determine default branch')
+end
+
+default_branch = default_branch.gsub(/^refs\/remotes\/origin\//, '')
+if branch == default_branch
+  fail("fatal: cannot push default branch (#{default_branch})")
+end
+
+if options[:add]
+  run('git add .', 'fatal: add failed')
+end
+
+commit_command = 'git commit --all'
+
+unless options[:edit]
+  commit_command += ' --no-edit'
+end
+
+unless options[:verify]
+  commit_command += ' --no-verify'
+end
+
+if options[:message]
+  commit_command += " --message #{options[:message].dump}"
+else
+  commit_command += " --amend"
+end
+
+run(commit_command, 'fatal: commit failed')
+
+if options[:rebase]
+  base = options[:rebase_branch] || "origin/#{default_branch}"
+  if options[:fetch]
+    run('git fetch', 'fatal: fetch failed')
+  end
+  run("git rebase #{base}", 'fatal: rebase failed')
+end
+
+if options[:push]
+  push_command = 'git push'
+  if options[:force]
+    push_command += ' --force'
+  end
+  push_command += ' --set-upstream origin HEAD'
+  run(push_command, 'fatal: publish failed')
+end
+
+if options[:open]
+  repo_path = `git config --get remote.origin.url`.strip
+  unless $?.success? && repo_path.match?(/^git@github[.]com:[^\/]+\/.*[.]git$/)
+    fail('fatal: repo path')
+  end
+
+  repo_path = repo_path.gsub(/^git@github[.]com:([^\/]+\/.*)[.]git$/, '\1')
+  url = "https://github.com/#{repo_path}/compare/#{branch}#files_bucket"
+
+  run("open #{url}", 'fatal: open failed')
+end
