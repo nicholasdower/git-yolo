@@ -109,6 +109,14 @@ if options[:edit] && options[:message]
   exit 1
 end
 
+if options[:rebase] && options[:fetch]
+  fetch_thread = Thread.start do
+    unless system('git fetch > /dev/null 2> /dev/null')
+      fail('fatal: fetch failed')
+    end
+  end
+end
+
 branch = `git branch --show-current`.strip
 if !$?.success? || branch.empty?
   fail('fatal: cannot determine current branch')
@@ -148,9 +156,7 @@ run(commit_command, 'fatal: commit failed')
 
 if options[:rebase]
   base = options[:rebase_branch] || "origin/#{default_branch}"
-  if options[:fetch]
-    run('git fetch', 'fatal: fetch failed')
-  end
+  fetch_thread.join if options[:fetch]
   run("git rebase #{base}", 'fatal: rebase failed')
 end
 
